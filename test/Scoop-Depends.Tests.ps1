@@ -1,9 +1,11 @@
-. "$PSScriptRoot\Scoop-TestLib.ps1"
-. "$PSScriptRoot\..\lib\core.ps1"
-. "$PSScriptRoot\..\lib\depends.ps1"
-. "$PSScriptRoot\..\lib\buckets.ps1"
-. "$PSScriptRoot\..\lib\install.ps1"
-. "$PSScriptRoot\..\lib\manifest.ps1"
+BeforeAll {
+    . "$PSScriptRoot\Scoop-TestLib.ps1"
+    . "$PSScriptRoot\..\lib\core.ps1"
+    . "$PSScriptRoot\..\lib\depends.ps1"
+    . "$PSScriptRoot\..\lib\buckets.ps1"
+    . "$PSScriptRoot\..\lib\install.ps1"
+    . "$PSScriptRoot\..\lib\manifest.ps1"
+}
 
 Describe 'Package Dependencies' -Tag 'Scoop' {
     Context 'Requirement function' {
@@ -11,11 +13,6 @@ Describe 'Package Dependencies' -Tag 'Scoop' {
             Test-7zipRequirement -Uri 'test.xz' | Should -BeTrue
             Test-7zipRequirement -Uri 'test.bin' | Should -BeFalse
             Test-7zipRequirement -Uri @('test.xz', 'test.bin') | Should -BeTrue
-        }
-        It 'Test Zstd requirement' {
-            Test-ZstdRequirement -Uri 'test.zst' | Should -BeTrue
-            Test-ZstdRequirement -Uri 'test.bin' | Should -BeFalse
-            Test-ZstdRequirement -Uri @('test.zst', 'test.bin') | Should -BeTrue
         }
         It 'Test lessmsi requirement' {
             Mock get_config { $true }
@@ -25,7 +22,6 @@ Describe 'Package Dependencies' -Tag 'Scoop' {
         }
         It 'Allow $Uri be $null' {
             Test-7zipRequirement -Uri $null | Should -BeFalse
-            Test-ZstdRequirement -Uri $null | Should -BeFalse
             Test-LessmsiRequirement -Uri $null | Should -BeFalse
         }
     }
@@ -69,6 +65,7 @@ Describe 'Package Dependencies' -Tag 'Scoop' {
         BeforeAll {
             Mock Test-HelperInstalled { $false }
             Mock get_config { $true } -ParameterFilter { $name -eq 'USE_LESSMSI' }
+            Mock get_config { $false } -ParameterFilter { $name -eq 'USE_EXTERNAL_7ZIP' }
             Mock Get-Manifest { 'lessmsi', @{}, $null, $null } -ParameterFilter { $app -eq 'lessmsi' }
             Mock Get-Manifest { '7zip', @{ url = 'test.msi' }, $null, $null } -ParameterFilter { $app -eq '7zip' }
             Mock Get-Manifest { 'innounp', @{}, $null, $null } -ParameterFilter { $app -eq 'innounp' }

@@ -110,13 +110,13 @@ function json_path([String] $json, [String] $jsonpath, [Hashtable] $substitution
             # Return versions in reverse order
             $result = [System.Linq.Enumerable]::Reverse($result)
         }
-        if ($single) {
+        if ([System.Linq.Enumerable]::Count($result) -eq 1 -or $single) {
             # Extract First value
             $result = [System.Linq.Enumerable]::First($result)
             # Convert first value to string
             $result = $result.ToString()
         } else {
-            $result = "$([String]::Join('\n', $result))"
+            $result = [Newtonsoft.Json.JsonConvert]::SerializeObject($result)
         }
         return $result
     } catch [Exception] {
@@ -132,7 +132,7 @@ function json_path_legacy([String] $json, [String] $jsonpath, [Hashtable] $subst
     $jsonpath.split('.') | ForEach-Object {
         $el = $_
 
-        # substitute the basename and version varibales into the jsonpath
+        # substitute the basename and version variables into the jsonpath
         if ($null -ne $substitutions) {
             $el = substitute $el $substitutions
         }

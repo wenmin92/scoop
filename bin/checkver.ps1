@@ -73,8 +73,7 @@ param(
 . "$PSScriptRoot\..\lib\buckets.ps1"
 . "$PSScriptRoot\..\lib\json.ps1"
 . "$PSScriptRoot\..\lib\versions.ps1"
-. "$PSScriptRoot\..\lib\install.ps1" # needed for hash generation
-. "$PSScriptRoot\..\lib\unix.ps1"
+. "$PSScriptRoot\..\lib\download.ps1"
 
 if ($App -ne '*' -and (Test-Path $App -PathType Leaf)) {
     $Dir = Split-Path $App
@@ -109,6 +108,7 @@ Get-Event | Remove-Event
 Get-EventSubscriber | Unregister-Event
 
 # start all downloads
+$in_progress = 0
 $Queue | ForEach-Object {
     $name, $json, $file = $_
 
@@ -120,47 +120,75 @@ $Queue | ForEach-Object {
     } else {
         $wc.Headers.Add('User-Agent', (Get-UserAgent))
     }
-    Register-ObjectEvent $wc downloadDataCompleted -ErrorAction Stop | Out-Null
 
     # Not Specified
+    $url = $json.homepage
+    $regex = ''
+    $jsonpath = ''
+    $xpath = ''
+    $replace = ''
+
     if ($json.checkver.url) {
         $url = $json.checkver.url
-    } else {
-        $url = $json.homepage
     }
 
     if ($json.checkver.re) {
         $regex = $json.checkver.re
     } elseif ($json.checkver.regex) {
         $regex = $json.checkver.regex
-    } else {
-        $regex = ''
     }
 
-    $jsonpath = ''
-    $xpath = ''
-    $replace = ''
-    $useGithubAPI = $false
+    ## GitHub
+    #
+    # ```json
+    # "homepage": "<valid-repository-url>",
+    # "checkver": "github"
+    # ```
+    #
+    # or
+    #
+    # ```json
+    # "checkver": {
+    #     "github": "<valid-repository-url-or-repository-api-url>"
+    # }
+    # ```
+    if (($json.checkver -eq 'github') -or $json.checkver.github) {
+        $githubUrlPattern = '^https://((www\.)?github\.com/[\w.-]+/[\w.-]+/?|api\.github\.com/repos/[\w.-]+/[\w.-]+/.+)$'
 
-    # GitHub
-    if ($regex) {
-        $githubRegex = $regex
-    } else {
-        $githubRegex = '/releases/tag/(?:v|V)?([\d.]+)'
-    }
-    if ($json.checkver -eq 'github') {
-        if (!$json.homepage.StartsWith('https://github.com/')) {
-            error "$name checkver expects the homepage to be a github repository"
+        $inputGithubUrl = $json.homepage
+        $fieldUsed = 'homepage'
+        if ($json.checkver.github) {
+            $inputGithubUrl = $json.checkver.github
+            $fieldUsed = 'checkver.github'
         }
-        $url = $json.homepage.TrimEnd('/') + '/releases/latest'
-        $regex = $githubRegex
-        $useGithubAPI = $true
-    }
 
-    if ($json.checkver.github) {
-        $url = $json.checkver.github.TrimEnd('/') + '/releases/latest'
-        $regex = $githubRegex
-        if ($json.checkver.PSObject.Properties.Count -eq 1) { $useGithubAPI = $true }
+        if ($inputGithubUrl -notmatch $githubUrlPattern) {
+            error "$name checkver expects $fieldUsed to be a valid GitHub repository URL"
+            return
+        }
+
+        $url = $inputGithubUrl.TrimEnd('/')
+        if ($url -notlike 'https://api.github.com*') {
+            $url = $url + '/releases/latest'
+        }
+
+        if ($GitHubToken) {
+            $url = $url -replace '//(www\.)?github\.com/', '//api.github.com/repos/'
+            $wc.Headers.Add('Authorization', "token $GitHubToken")
+        }
+
+        if ($url -like 'https://api.github.com*') {
+            # Default jsonpath/regex in GitHub API mode
+            if (-not $json.checkver.script) {
+                $jsonpath = '$.tag_name'
+            }
+            if (-not $regex) {
+                $regex = '(?:v|V)?([\d.-]+)'
+            }
+        } elseif (-not $regex) {
+            # Default regex in GitHub HTML mode
+            $regex = '/releases/tag/(?:v|V)?([\d.-]+)'
+        }
     }
 
     # SourceForge
@@ -217,29 +245,30 @@ $Queue | ForEach-Object {
 
     $reverse = $json.checkver.reverse -and $json.checkver.reverse -eq 'true'
 
-    if ($url -like '*api.github.com/*') { $useGithubAPI = $true }
-
-    if ($useGithubAPI -and ($null -ne $GitHubToken)) {
-        $url = $url -replace '//(www\.)?github.com/', '//api.github.com/repos/'
-        $wc.Headers.Add('Authorization', "token $GitHubToken")
-    }
-
     $url = substitute $url $substitutions
 
     $state = New-Object psobject @{
-        app      = $name;
-        file     = $file;
-        url      = $url;
-        regex    = $regex;
-        json     = $json;
-        jsonpath = $jsonpath;
-        xpath    = $xpath;
-        reverse  = $reverse;
-        replace  = $replace;
+        app      = $name
+        file     = $file
+        url      = $url
+        regex    = $regex
+        json     = $json
+        jsonpath = $jsonpath
+        xpath    = $xpath
+        reverse  = $reverse
+        replace  = $replace
+    }
+
+    get_config PRIVATE_HOSTS | Where-Object { $_ -ne $null -and $url -match $_.match } | ForEach-Object {
+        (ConvertFrom-StringData -StringData $_.Headers).GetEnumerator() | ForEach-Object {
+            $wc.Headers[$_.Key] = $_.Value
+        }
     }
 
     $wc.Headers.Add('Referer', (strip_filename $url))
+    Register-ObjectEvent $wc downloadDataCompleted -ErrorAction Stop | Out-Null
     $wc.DownloadDataAsync($url, $state)
+    $in_progress++
 }
 
 function next($er) {
@@ -248,13 +277,13 @@ function next($er) {
 }
 
 # wait for all to complete
-$in_progress = $Queue.length
 while ($in_progress -gt 0) {
     $ev = Wait-Event
     Remove-Event $ev.SourceIdentifier
     $in_progress--
 
     $state = $ev.SourceEventArgs.UserState
+    $result = $ev.SourceEventArgs.Result
     $app = $state.app
     $file = $state.file
     $json = $state.json
@@ -268,27 +297,50 @@ while ($in_progress -gt 0) {
     $expected_ver = $json.version
     $ver = $Version
 
+    $matchesHashtable = @{}
+
     if (!$ver) {
-        if (!$regex -and $replace) {
+        if (!$regexp -and $replace) {
             next "'replace' requires 're' or 'regex'"
             continue
         }
         $err = $ev.SourceEventArgs.Error
         if ($err) {
-            next "$($err.message)`r`nURL $url is not valid"
-            continue
+            if (!$script) {
+                next "$($err.message)`r`nURL $url is not valid"
+                continue
+            } else {
+                # Run script despite URL download failure
+                Write-Host "$($err.message)`r`nURL $url is not valid. Falling back to checkver.script ..."
+            }
         }
 
-        if ($url) {
-            $page = (Get-Encoding($wc)).GetString($ev.SourceEventArgs.Result)
+        $page = $null
+        $source = $url
+
+        if ($url -and !$err) {
+            $ms = New-Object System.IO.MemoryStream
+            $ms.Write($result, 0, $result.Length)
+            $ms.Seek(0, 0) | Out-Null
+            if ($result[0] -eq 0x1F -and $result[1] -eq 0x8B) {
+                $ms = New-Object System.IO.Compression.GZipStream($ms, [System.IO.Compression.CompressionMode]::Decompress)
+            }
+            $page = (New-Object System.IO.StreamReader($ms, (Get-Encoding $wc))).ReadToEnd()
         }
+
         if ($script) {
             $page = Invoke-Command ([scriptblock]::Create($script -join "`r`n"))
+            $source = 'the output of script'
+        }
+
+        if ($null -eq $page) {
+            next "couldn't retrieve content from $source"
+            continue
         }
 
         if ($jsonpath) {
             # Return only a single value if regex is absent
-            $noregex = [String]::IsNullOrEmpty($regex)
+            $noregex = [String]::IsNullOrEmpty($regexp)
             # If reverse is ON and regex is ON,
             # Then reverse would have no effect because regex handles reverse
             # on its own
@@ -298,7 +350,7 @@ while ($in_progress -gt 0) {
                 $ver = json_path_legacy $page $jsonpath
             }
             if (!$ver) {
-                next "couldn't find '$jsonpath' in $url"
+                next "couldn't find '$jsonpath' in $source"
                 continue
             }
         }
@@ -310,12 +362,17 @@ while ($in_progress -gt 0) {
             # Then add them into the NamespaceManager
             $nsmgr = New-Object System.Xml.XmlNamespaceManager($xml.NameTable)
             $nsList | ForEach-Object {
-                $nsmgr.AddNamespace($_.LocalName, $_.Value)
+                if ($_.LocalName -eq 'xmlns') {
+                    $nsmgr.AddNamespace('ns', $_.Value)
+                    $xpath = $xpath -replace '/([^:/]+)((?=/)|(?=$))', '/ns:$1'
+                } else {
+                    $nsmgr.AddNamespace($_.LocalName, $_.Value)
+                }
             }
             # Getting version from XML, using XPath
             $ver = $xml.SelectSingleNode($xpath, $nsmgr).'#text'
             if (!$ver) {
-                next "couldn't find '$xpath' in $url"
+                next "couldn't find '$($xpath -replace 'ns:', '')' in $source"
                 continue
             }
         }
@@ -331,31 +388,30 @@ while ($in_progress -gt 0) {
         }
 
         if ($regexp) {
-            $regex = New-Object System.Text.RegularExpressions.Regex($regexp)
+            $re = New-Object System.Text.RegularExpressions.Regex($regexp)
             if ($reverse) {
-                $match = $regex.Matches($page) | Select-Object -Last 1
+                $match = $re.Matches($page) | Select-Object -Last 1
             } else {
-                $match = $regex.Matches($page) | Select-Object -First 1
+                $match = $re.Matches($page) | Select-Object -First 1
             }
 
             if ($match -and $match.Success) {
-                $matchesHashtable = @{}
-                $regex.GetGroupNames() | ForEach-Object { $matchesHashtable.Add($_, $match.Groups[$_].Value) }
+                $re.GetGroupNames() | ForEach-Object { $matchesHashtable.Add($_, $match.Groups[$_].Value) }
                 $ver = $matchesHashtable['1']
                 if ($replace) {
-                    $ver = $regex.Replace($match.Value, $replace)
+                    $ver = $re.Replace($match.Value, $replace)
                 }
                 if (!$ver) {
                     $ver = $matchesHashtable['version']
                 }
             } else {
-                next "couldn't match '$regexp' in $url"
+                next "couldn't match '$regexp' in $source"
                 continue
             }
         }
 
         if (!$ver) {
-            next "couldn't find new version in $url"
+            next "couldn't find new version in $source"
             continue
         }
     }

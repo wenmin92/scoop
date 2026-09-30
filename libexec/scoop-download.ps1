@@ -15,20 +15,25 @@
 #
 # Options:
 #   -f, --force                     Force download (overwrite cache)
-#   -h, --no-hash-check             Skip hash verification (use with caution!)
+#   -s, --skip-hash-check           Skip hash verification (use with caution!)
 #   -u, --no-update-scoop           Don't update Scoop before downloading if it's outdated
 #   -a, --arch <32bit|64bit|arm64>  Use the specified architecture, if the app supports it
 
 . "$PSScriptRoot\..\lib\getopt.ps1"
 . "$PSScriptRoot\..\lib\json.ps1" # 'autoupdate.ps1' (indirectly)
 . "$PSScriptRoot\..\lib\autoupdate.ps1" # 'generate_user_manifest' (indirectly)
+. "$PSScriptRoot\..\lib\versions.ps1" # 'Select-CurrentVersion'
 . "$PSScriptRoot\..\lib\manifest.ps1" # 'generate_user_manifest' 'Get-Manifest'
-. "$PSScriptRoot\..\lib\install.ps1"
+. "$PSScriptRoot\..\lib\download.ps1"
+. "$PSScriptRoot\..\lib\install.ps1" # 'nightly_version'
+if (get_config USE_SQLITE_CACHE) {
+    . "$PSScriptRoot\..\lib\database.ps1"
+}
 
-$opt, $apps, $err = getopt $args 'fhua:' 'force', 'no-hash-check', 'no-update-scoop', 'arch='
+$opt, $apps, $err = getopt $args 'fsua:' 'force', 'skip-hash-check', 'no-update-scoop', 'arch='
 if ($err) { error "scoop download: $err"; exit 1 }
 
-$check_hash = !($opt.h -or $opt.'no-hash-check')
+$check_hash = !($opt.s -or $opt.'skip-hash-check')
 $use_cache = !($opt.f -or $opt.force)
 $architecture = Get-DefaultArchitecture
 try {
@@ -37,19 +42,22 @@ try {
     abort "ERROR: $_"
 }
 
+$apps = $apps | Select-Object -Unique
+
 if (!$apps) { error '<app> missing'; my_usage; exit 1 }
 
 if (is_scoop_outdated) {
     if ($opt.u -or $opt.'no-update-scoop') {
         warn "Scoop is out of date."
     } else {
-        scoop update
+        & "$PSScriptRoot\scoop-update.ps1"
     }
 }
 
 # we only want to show this warning once
 if(!$use_cache) { warn "Cache is being ignored." }
 
+$download_failed = $false
 foreach ($curr_app in $apps) {
     # Prevent leaking variables from previous iteration
     $bucket = $version = $app = $manifest = $url = $null
@@ -57,43 +65,50 @@ foreach ($curr_app in $apps) {
     $app, $bucket, $version = parse_app $curr_app
     $app, $manifest, $bucket, $url = Get-Manifest "$bucket/$app"
 
-    info "Starting download for $app..."
+    info "Downloading '$app'$(if ($version) { " ($version)" }) [$architecture]$(if ($bucket) { " from $bucket bucket" })"
 
     # Generate manifest if there is different version in manifest
     if (($null -ne $version) -and ($manifest.version -ne $version)) {
         $generated = generate_user_manifest $app $bucket $version
         if ($null -eq $generated) {
             error 'Manifest cannot be generated with provided version'
+            $download_failed = $true
             continue
         }
         $manifest = parse_json($generated)
     }
 
     if(!$manifest) {
-        error "Couldn't find manifest for '$app'$(if($url) { " at the URL $url" })."
+        error "Couldn't find manifest for '$app'$(if($bucket) { " from '$bucket' bucket" } elseif($url) { " at '$url'" })."
+        $download_failed = $true
         continue
     }
     $version = $manifest.version
     if(!$version) {
         error "Manifest doesn't specify a version."
+        $download_failed = $true
         continue
     }
     if($version -match '[^\w\.\-\+_]') {
         error "Manifest version has unsupported character '$($matches[0])'."
+        $download_failed = $true
         continue
     }
 
     $curr_check_hash = $check_hash
     if ($version -eq 'nightly') {
-        $version = nightly_version $(get-date)
+        $version = nightly_version
         $curr_check_hash = $false
     }
 
     $architecture = Get-SupportedArchitecture $manifest $architecture
     if ($null -eq $architecture) {
         error "'$app' doesn't support current architecture!"
+        $download_failed = $true
         continue
     }
+
+    $dl_failure = $false
 
     if(Test-Aria2Enabled) {
         Invoke-CachedAria2Download $app $version $manifest $architecture $cachedir $manifest.cookie $use_cache $curr_check_hash
@@ -104,6 +119,7 @@ foreach ($curr_app in $apps) {
             } catch {
                 write-host -f darkred $_
                 error "URL $url is not valid"
+                error $(new_issue_msg $app $bucket 'download failed')
                 $dl_failure = $true
                 continue
             }
@@ -123,6 +139,7 @@ foreach ($curr_app in $apps) {
                         warn 'SourceForge.net is known for causing hash validation fails. Please try again before opening a ticket.'
                     }
                     error (new_issue_msg $app $bucket "hash check failed")
+                    $dl_failure = $true
                     continue
                 }
             } else {
@@ -133,7 +150,9 @@ foreach ($curr_app in $apps) {
 
     if (!$dl_failure) {
         success "'$app' ($version) was downloaded successfully!"
+    } else {
+        $download_failed = $true
     }
 }
 
-exit 0
+exit [int]$download_failed

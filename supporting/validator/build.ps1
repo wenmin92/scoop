@@ -4,7 +4,7 @@ Push-Location $PSScriptRoot
 . "$PSScriptRoot\..\..\lib\install.ps1"
 
 if (!$Fast) {
-    Write-Host "Install dependencies ..."
+    Write-Host 'Install dependencies ...'
     & "$PSScriptRoot\install.ps1"
 }
 
@@ -21,7 +21,7 @@ Write-Output 'Computing checksums ...'
 Remove-Item "$PSScriptRoot\bin\checksum.sha256" -ErrorAction Ignore
 Remove-Item "$PSScriptRoot\bin\checksum.sha512" -ErrorAction Ignore
 Get-ChildItem "$PSScriptRoot\bin\*" -Include *.exe, *.dll | ForEach-Object {
-    "$(compute_hash $_ 'sha256') *$($_.Name)" | Out-File "$PSScriptRoot\bin\checksum.sha256" -Append -Encoding oem
-    "$(compute_hash $_ 'sha512') *$($_.Name)" | Out-File "$PSScriptRoot\bin\checksum.sha512" -Append -Encoding oem
+    "$((Get-FileHash -Path $_ -Algorithm SHA256).Hash.ToLower()) *$($_.Name)" | Out-File "$PSScriptRoot\bin\checksum.sha256" -Append -Encoding oem
+    "$((Get-FileHash -Path $_ -Algorithm SHA512).Hash.ToLower()) *$($_.Name)" | Out-File "$PSScriptRoot\bin\checksum.sha512" -Append -Encoding oem
 }
 Pop-Location

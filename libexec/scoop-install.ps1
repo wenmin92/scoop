@@ -4,39 +4,50 @@
 #      scoop install git
 #
 # To install a different version of the app
-# (note that this will auto-generate the manifest using current version):
+# (will search sqlite cache if enabled, then git history (if use_git_history is $true), then auto-generate manifest as fallback):
 #      scoop install gh@2.7.0
 #
 # To install an app from a manifest at a URL:
 #      scoop install https://raw.githubusercontent.com/ScoopInstaller/Main/master/bucket/runat.json
 #
+# To install a different version of the app from a URL:
+#       scoop install https://raw.githubusercontent.com/ScoopInstaller/Main/master/bucket/neovim.json@0.9.0
+#
 # To install an app from a manifest on your computer
 #      scoop install \path\to\app.json
+#
+# To install an app from a manifest on your computer
+#      scoop install \path\to\app.json@version
 #
 # Options:
 #   -g, --global                    Install the app globally
 #   -i, --independent               Don't install dependencies automatically
 #   -k, --no-cache                  Don't use the download cache
+#   -s, --skip-hash-check           Skip hash validation (use with caution!)
 #   -u, --no-update-scoop           Don't update Scoop before installing if it's outdated
-#   -s, --skip                      Skip hash validation (use with caution!)
 #   -a, --arch <32bit|64bit|arm64>  Use the specified architecture, if the app supports it
 
 . "$PSScriptRoot\..\lib\getopt.ps1"
 . "$PSScriptRoot\..\lib\json.ps1" # 'autoupdate.ps1' 'manifest.ps1' (indirectly)
 . "$PSScriptRoot\..\lib\autoupdate.ps1" # 'generate_user_manifest' (indirectly)
 . "$PSScriptRoot\..\lib\manifest.ps1" # 'generate_user_manifest' 'Get-Manifest' 'Select-CurrentVersion' (indirectly)
+. "$PSScriptRoot\..\lib\system.ps1"
 . "$PSScriptRoot\..\lib\install.ps1"
+. "$PSScriptRoot\..\lib\download.ps1"
 . "$PSScriptRoot\..\lib\decompress.ps1"
 . "$PSScriptRoot\..\lib\shortcuts.ps1"
 . "$PSScriptRoot\..\lib\psmodules.ps1"
 . "$PSScriptRoot\..\lib\versions.ps1"
 . "$PSScriptRoot\..\lib\depends.ps1"
+if (get_config USE_SQLITE_CACHE) {
+    . "$PSScriptRoot\..\lib\database.ps1"
+}
 
-$opt, $apps, $err = getopt $args 'gikusa:' 'global', 'independent', 'no-cache', 'no-update-scoop', 'skip', 'arch='
-if ($err) { "scoop install: $err"; exit 1 }
+$opt, $apps, $err = getopt $args 'giksua:' 'global', 'independent', 'no-cache', 'skip-hash-check', 'no-update-scoop', 'arch='
+if ($err) { error "scoop install: $err"; exit 1 }
 
 $global = $opt.g -or $opt.global
-$check_hash = !($opt.s -or $opt.skip)
+$check_hash = !($opt.s -or $opt.'skip-hash-check')
 $independent = $opt.i -or $opt.independent
 $use_cache = !($opt.k -or $opt.'no-cache')
 $architecture = Get-DefaultArchitecture
@@ -56,7 +67,7 @@ if (is_scoop_outdated) {
     if ($opt.u -or $opt.'no-update-scoop') {
         warn "Scoop is out of date."
     } else {
-        scoop update
+        & "$PSScriptRoot\scoop-update.ps1"
     }
 }
 
@@ -81,24 +92,37 @@ $specific_versions = $apps | Where-Object {
 }
 
 # compare object does not like nulls
-if ($specific_versions.length -gt 0) {
+if ($specific_versions.Count -gt 0) {
     $difference = Compare-Object -ReferenceObject $apps -DifferenceObject $specific_versions -PassThru
 } else {
     $difference = $apps
 }
 
+$resolved = @()
 $specific_versions_paths = $specific_versions | ForEach-Object {
-    $app, $bucket, $version = parse_app $_
+    $spec = $_
+    $app, $bucket, $version = parse_app $spec
     if (installed_manifest $app $version) {
-        warn "'$app' ($version) is already installed.`nUse 'scoop update $app$(if ($global) { " --global" })' to install a new version."
+        warn "'$app' ($version) is already installed.`nUse 'scoop update $app$(if ($global) { ' --global' })' to install a new version."
+        $resolved += $spec
         continue
     }
 
-    generate_user_manifest $app $bucket $version
+    $path = generate_user_manifest $app $bucket $version
+    if (!$path) {
+        warn "Could not find manifest for '$spec'"
+        return
+    }
+    $resolved += $spec
+    $path
 }
-$apps = @(($specific_versions_paths + $difference) | Where-Object { $_ } | Sort-Object -Unique)
+if ($resolved.Count -lt $specific_versions.Count) {
+    $missing = $specific_versions | Where-Object { $_ -notin $resolved }
+    abort "Could not install: $($missing -join ', ')"
+}
+$apps = @((@($specific_versions_paths) + $difference) | Where-Object { $_ } | Select-Object -Unique)
 
-# remember which were explictly requested so that we can
+# remember which were explicitly requested so that we can
 # differentiate after dependencies are added
 $explicit_apps = $apps
 

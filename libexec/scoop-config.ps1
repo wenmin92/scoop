@@ -27,11 +27,19 @@
 # use_lessmsi: $true|$false
 #       Prefer lessmsi utility over native msiexec.
 #
+# use_sqlite_cache: $true|$false
+#       Use SQLite database for caching. This is useful for speeding up 'scoop search' and 'scoop shim' commands.
+#
+# use_git_history: $true|$false
+#       Enable searching for specific versions in git history when installing apps with version specifiers.
+#       When enabled, Scoop will first search the bucket's git history for the exact version before falling back to autoupdate.
+#       (Default is $true)
+#
 # no_junction: $true|$false
 #       The 'current' version alias will not be used. Shims and shortcuts will point to specific version instead.
 #
-# scoop_repo: http://github.com/ScoopInstaller/Scoop
-#       Git repository containining scoop source code.
+# scoop_repo: https://github.com/ScoopInstaller/Scoop
+#       Git repository containing scoop source code.
 #       This configuration is useful for custom forks.
 #
 # scoop_branch: master|develop
@@ -53,7 +61,7 @@
 #
 # default_architecture: 64bit|32bit|arm64
 #       Allow to configure preferred architecture for application installation.
-#       If not specified, architecture is determined be system.
+#       If not specified, architecture is determined by system.
 #
 # debug: $true|$false
 #       Additional and detailed output will be shown.
@@ -111,21 +119,36 @@
 #       Should be in the format 'YYYY-MM-DD', 'YYYY/MM/DD' or any other forms that accepted by '[System.DateTime]::Parse()'.
 #       Ref: https://docs.microsoft.com/dotnet/api/system.datetime.parse?view=netframework-4.5#StringToParse
 #
+# update_nightly: $true|$false
+#       Nightly version is formatted as 'nightly-yyyyMMdd' and will be updated after one day if this is set to $true.
+#       Otherwise, nightly version will not be updated unless `--force` is used.
+#
+# use_isolated_path: $true|$false|[string]
+#       When set to $true, Scoop will use `SCOOP_PATH` environment variable to store apps' `PATH`s.
+#       When set to arbitrary non-empty string, Scoop will use that string as the environment variable name instead.
+#       This is useful when you want to isolate Scoop from the system `PATH`.
+#
 # ARIA2 configuration
 # -------------------
 #
 # aria2-enabled: $true|$false
 #       Aria2c will be used for downloading of artifacts.
+#       (Default is $true)
 #
 # aria2-warning-enabled: $true|$false
 #       Disable Aria2c warning which is shown while downloading.
+#       (Default is $true)
+#
+# aria2-fallback-enabled: $true|$false
+#       Automatically falls back to the default downloader when Aria2c download fails.
+#       (Default is $true)
 #
 # aria2-retry-wait: 2
 #       Number of seconds to wait between retries.
 #       See: 'https://aria2.github.io/manual/en/html/aria2c.html#cmdoption-retry-wait'
 #
 # aria2-split: 5
-#       Number of connections used for downlaod.
+#       Number of connections used for download.
 #       See: 'https://aria2.github.io/manual/en/html/aria2c.html#cmdoption-s'
 #
 # aria2-max-connection-per-server: 5
@@ -133,7 +156,7 @@
 #       See: 'https://aria2.github.io/manual/en/html/aria2c.html#cmdoption-x'
 #
 # aria2-min-split-size: 5M
-#       Downloaded files will be splitted by this configured size and downloaded using multiple connections.
+#       Downloaded files will be split by this configured size and downloaded using multiple connections.
 #       See: 'https://aria2.github.io/manual/en/html/aria2c.html#cmdoption-k'
 #
 # aria2-options:
@@ -147,35 +170,21 @@ if (!$name) {
 } elseif ($name -like '--help') {
     my_usage
 } elseif ($name -like 'rm') {
-    # NOTE Scoop config file migration. Remove this after 2023/6/30
-    if ($value -notin 'SCOOP_REPO', 'SCOOP_BRANCH' -and $value -in $newConfigNames.Keys) {
-        warn ('Config option "{0}" is deprecated, please use "{1}" instead next time.' -f $value, $newConfigNames.$value)
-        $value = $newConfigNames.$value
-    }
-    # END NOTE
     set_config $value $null | Out-Null
     Write-Host "'$value' has been removed"
 } elseif ($null -ne $value) {
-    # NOTE Scoop config file migration. Remove this after 2023/6/30
-    if ($name -notin 'SCOOP_REPO', 'SCOOP_BRANCH' -and $name -in $newConfigNames.Keys) {
-        warn ('Config option "{0}" is deprecated, please use "{1}" instead next time.' -f $name, $newConfigNames.$name)
-        $name = $newConfigNames.$name
-    }
-    # END NOTE
     set_config $name $value | Out-Null
     Write-Host "'$name' has been set to '$value'"
 } else {
-    # NOTE Scoop config file migration. Remove this after 2023/6/30
-    if ($name -notin 'SCOOP_REPO', 'SCOOP_BRANCH' -and $name -in $newConfigNames.Keys) {
-        warn ('Config option "{0}" is deprecated, please use "{1}" instead next time.' -f $name, $newConfigNames.$name)
-        $name = $newConfigNames.$name
-    }
-    # END NOTE
     $value = get_config $name
     if($null -eq $value) {
         Write-Host "'$name' is not set"
     } else {
-        $value
+        if ($value -is [System.DateTime]) {
+            $value.ToString('o')
+        } else {
+            $value
+        }
     }
 }
 

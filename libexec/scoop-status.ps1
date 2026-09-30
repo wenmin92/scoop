@@ -6,9 +6,10 @@
 
 . "$PSScriptRoot\..\lib\manifest.ps1" # 'manifest' 'parse_json' "install_info"
 . "$PSScriptRoot\..\lib\versions.ps1" # 'Select-CurrentVersion'
+. "$PSScriptRoot\..\lib\download.ps1" # 'Get-UserAgent'
 
 # check if scoop needs updating
-$currentdir = fullpath $(versiondir 'scoop' 'current')
+$currentdir = versiondir 'scoop' 'current'
 $needs_update = $false
 $bucket_needs_update = $false
 $script:network_failure = $false
@@ -21,10 +22,10 @@ if (!(Get-FormatData ScoopStatus)) {
 
 function Test-UpdateStatus($repopath) {
     if (Test-Path "$repopath\.git") {
-        git_cmd -C "`"$repopath`"" fetch -q origin
+        Invoke-Git -Path $repopath -ArgumentList @('fetch', '-q', 'origin')
         $script:network_failure = 128 -eq $LASTEXITCODE
-        $branch  = git -C $repopath branch --show-current
-        $commits = git -C $repopath log "HEAD..origin/$branch" --oneline
+        $branch  = Invoke-Git -Path $repopath -ArgumentList @('branch', '--show-current')
+        $commits = Invoke-Git -Path $repopath -ArgumentList @('log', "HEAD..origin/$branch", '--oneline')
         if ($commits) { return $true }
         else { return $false }
     } else {
@@ -58,7 +59,7 @@ $true, $false | ForEach-Object { # local and global apps
     Get-ChildItem $dir | Where-Object name -NE 'scoop' | ForEach-Object {
         $app = $_.name
         $status = app_status $app $global
-        if (!$status.outdated -and !$status.failed -and !$status.removed -and !$status.missing_deps) { return }
+        if (!$status.outdated -and !$status.failed -and !$status.deprecated -and !$status.removed -and !$status.missing_deps) { return }
 
         $item = [ordered]@{}
         $item.Name = $app
@@ -66,9 +67,10 @@ $true, $false | ForEach-Object { # local and global apps
         $item.'Latest Version' = if ($status.outdated) { $status.latest_version } else { "" }
         $item.'Missing Dependencies' = $status.missing_deps -Split ' ' -Join ' | '
         $info = @()
-        if ($status.failed)  { $info += 'Install failed' }
-        if ($status.hold)    { $info += 'Held package' }
-        if ($status.removed) { $info += 'Manifest removed' }
+        if ($status.failed)     { $info += 'Install failed' }
+        if ($status.hold)       { $info += 'Held package' }
+        if ($status.deprecated) { $info += 'Deprecated' }
+        if ($status.removed)    { $info += 'Manifest removed' }
         $item.Info = $info -join ', '
         $list += [PSCustomObject]$item
     }

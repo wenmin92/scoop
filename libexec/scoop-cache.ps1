@@ -16,7 +16,7 @@ param($cmd)
 
 function cacheinfo($file) {
     $app, $version, $url = $file.Name -split '#'
-    New-Object PSObject -Property @{ Name = $app; Version = $version; Length = $file.Length; URL = $url }
+    New-Object PSObject -Property @{ Name = $app; Version = $version; Length = $file.Length }
 }
 
 function cacheshow($app) {
@@ -28,14 +28,14 @@ function cacheshow($app) {
     $files = @(Get-ChildItem $cachedir | Where-Object -Property Name -Value "^$app#" -Match)
     $totalLength = ($files | Measure-Object -Property Length -Sum).Sum
 
-    $files | ForEach-Object { cacheinfo $_ } | Select-Object Name, Version, Length, URL
+    $files | ForEach-Object { cacheinfo $_ } | Select-Object Name, Version, Length
 
     Write-Host "Total: $($files.Length) $(pluralize $files.Length 'file' 'files'), $(filesize $totalLength)" -ForegroundColor Yellow
 }
 
 function cacheremove($app) {
     if (!$app) {
-        'ERROR: <app(s)> missing'
+        error '<app(s)> missing'
         my_usage
         exit 1
     } elseif ($app -eq '*' -or $app -eq '-a' -or $app -eq '--all') {
@@ -48,7 +48,7 @@ function cacheremove($app) {
 
     $files | ForEach-Object {
         $curr = cacheinfo $_
-        Write-Host "Removing $($curr.URL)..."
+        Write-Host "Removing $($_.Name)..."
         Remove-Item $_.FullName
         if(Test-Path "$cachedir\$($curr.Name).txt") {
             Remove-Item "$cachedir\$($curr.Name).txt"

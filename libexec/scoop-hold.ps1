@@ -15,7 +15,7 @@
 . "$PSScriptRoot\..\lib\versions.ps1" # 'Select-CurrentVersion'
 
 $opt, $apps, $err = getopt $args 'g' 'global'
-if ($err) { "scoop hold: $err"; exit 1 }
+if ($err) { error "scoop hold: $err"; exit 1 }
 
 $global = $opt.g -or $opt.global
 
@@ -29,14 +29,13 @@ if ($global -and !(is_admin)) {
     exit 1
 }
 
-$apps | ForEach-Object {
-    $app = $_
+foreach ($app in $apps) {
 
     if ($app -eq 'scoop') {
         $hold_update_until = [System.DateTime]::Now.AddDays(1)
         set_config HOLD_UPDATE_UNTIL $hold_update_until.ToString('o') | Out-Null
         success "$app is now held and might not be updated until $($hold_update_until.ToLocalTime())."
-        return
+        continue
     }
     if (!(installed $app $global)) {
         if ($global) {
@@ -44,18 +43,26 @@ $apps | ForEach-Object {
         } else {
             error "'$app' is not installed."
         }
-        return
+        continue
     }
 
-    if (get_config NO_JUNCTION){
+    if (get_config NO_JUNCTION) {
         $version = Select-CurrentVersion -App $app -Global:$global
     } else {
         $version = 'current'
     }
     $dir = versiondir $app $version $global
     $json = install_info $app $version $global
+    if (!$json) {
+        error "Failed to hold '$app'."
+        continue
+    }
     $install = @{}
     $json | Get-Member -MemberType Properties | ForEach-Object { $install.Add($_.Name, $json.($_.Name)) }
+    if ($install.hold) {
+        info "'$app' is already held."
+        continue
+    }
     $install.hold = $true
     save_install_info $install $dir
     success "$app is now held and can not be updated anymore."

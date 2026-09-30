@@ -51,7 +51,9 @@ function Select-CurrentVersion { # 'manifest.ps1'
     process {
         $currentPath = "$(appdir $AppName $Global)\current"
         if (!(get_config NO_JUNCTION)) {
-            $currentVersion = (parse_json "$currentPath\manifest.json").version
+            $manifestPath = "$currentPath\scoop-manifest.json"
+            if (!(Test-Path $manifestPath)) { $manifestPath = "$currentPath\manifest.json" }
+            $currentVersion = (parse_json $manifestPath).version
             if ($currentVersion -eq 'nightly') {
                 $currentVersion = (Get-Item $currentPath).Target | Split-Path -Leaf
             }
@@ -94,7 +96,8 @@ function Get-InstalledVersion {
     process {
         $appPath = appdir $AppName $Global
         if (Test-Path $appPath) {
-            $versions = @((Get-ChildItem "$appPath\*\install.json" | Sort-Object -Property LastWriteTimeUtc).Directory.Name)
+            $versions = @((Get-ChildItem "$appPath\*\scoop-install.json", "$appPath\*\install.json" -ErrorAction SilentlyContinue |
+                        Sort-Object -Property LastWriteTimeUtc).Directory.Name | Select-Object -Unique)
             return $versions | Where-Object { ($_ -ne 'current') -and ($_ -notlike '_*.old*') }
         } else {
             return @()
@@ -147,9 +150,20 @@ function Compare-Version {
         $splitReferenceVersion = @(SplitVersion -Version $ReferenceVersion -Delimiter $Delimiter)
         $splitDifferenceVersion = @(SplitVersion -Version $DifferenceVersion -Delimiter $Delimiter)
 
-        # Nightly versions are always equal
+        # Nightly versions are always equal unless UPDATE_NIGHTLY is $true
         if ($splitReferenceVersion[0] -eq 'nightly' -and $splitDifferenceVersion[0] -eq 'nightly') {
-            return 0
+            if (get_config UPDATE_NIGHTLY) {
+                # nightly versions will be compared by date if UPDATE_NIGHTLY is $true
+                if ($null -eq $splitReferenceVersion[1]) {
+                    $splitReferenceVersion += Get-Date -Format 'yyyyMMdd'
+                }
+                if ($null -eq $splitDifferenceVersion[1]) {
+                    $splitDifferenceVersion += Get-Date -Format 'yyyyMMdd'
+                }
+                return [Math]::Sign($splitDifferenceVersion[1] - $splitReferenceVersion[1])
+            } else {
+                return 0
+            }
         }
 
         for ($i = 0; $i -lt [Math]::Max($splitReferenceVersion.Length, $splitDifferenceVersion.Length); $i++) {

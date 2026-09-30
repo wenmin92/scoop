@@ -3,25 +3,16 @@
 # Help: Searches for apps that are available to install.
 #
 # If used with [query], shows app names that match the query.
+#   - With 'use_sqlite_cache' enabled, [query] is partially matched against app names, binaries, and shortcuts.
+#   - Without 'use_sqlite_cache', [query] can be a regular expression to match against app names and binaries.
 # Without [query], shows all the available apps.
 param($query)
 
 . "$PSScriptRoot\..\lib\manifest.ps1" # 'manifest'
 . "$PSScriptRoot\..\lib\versions.ps1" # 'Get-LatestVersion'
+. "$PSScriptRoot\..\lib\download.ps1"
 
-$list = @()
-
-try {
-    $query = New-Object Regex $query, 'IgnoreCase'
-} catch {
-    abort "Invalid regular expression: $($_.Exception.InnerException.Message)"
-}
-
-$githubtoken = Get-GitHubToken
-$authheader = @{}
-if ($githubtoken) {
-    $authheader = @{'Authorization' = "token $githubtoken"}
-}
+$list = [System.Collections.Generic.List[PSCustomObject]]::new()
 
 function bin_match($manifest, $query) {
     if (!$manifest.bin) { return $false }
@@ -32,41 +23,122 @@ function bin_match($manifest, $query) {
         if ((strip_ext $fname) -match $query) { $fname }
         elseif ($alias -match $query) { $alias }
     }
+
+    if ($bins) { return $bins }
+    else { return $false }
+}
+
+function bin_match_json($json, $query) {
+    [System.Text.Json.JsonElement]$bin = [System.Text.Json.JsonElement]::new()
+    if (!$json.RootElement.TryGetProperty('bin', [ref] $bin)) { return $false }
+    $bins = @()
+    if ($bin.ValueKind -eq [System.Text.Json.JsonValueKind]::String -and [System.IO.Path]::GetFileNameWithoutExtension($bin) -match $query) {
+        $bins += [System.IO.Path]::GetFileName($bin)
+    } elseif ($bin.ValueKind -eq [System.Text.Json.JsonValueKind]::Array) {
+        foreach ($subbin in $bin.EnumerateArray()) {
+            if ($subbin.ValueKind -eq [System.Text.Json.JsonValueKind]::String -and [System.IO.Path]::GetFileNameWithoutExtension($subbin) -match $query) {
+                $bins += [System.IO.Path]::GetFileName($subbin)
+            } elseif ($subbin.ValueKind -eq [System.Text.Json.JsonValueKind]::Array) {
+                if ([System.IO.Path]::GetFileNameWithoutExtension($subbin[0]) -match $query) {
+                    $bins += [System.IO.Path]::GetFileName($subbin[0])
+                } elseif ($subbin.GetArrayLength() -ge 2 -and $subbin[1] -match $query) {
+                    $bins += $subbin[1]
+                }
+            }
+        }
+    }
+
     if ($bins) { return $bins }
     else { return $false }
 }
 
 function search_bucket($bucket, $query) {
-    $apps = apps_in_bucket (Find-BucketDirectory $bucket) | ForEach-Object { @{ name = $_ } }
+    $apps = Get-ChildItem (Find-BucketDirectory $bucket) -Filter '*.json' -Recurse
 
-    if ($query) {
-        $apps = $apps | Where-Object {
-            if ($_.name -match $query) { return $true }
-            $bin = bin_match (manifest $_.name $bucket) $query
+    $apps | ForEach-Object {
+        $filepath = $_.FullName
+        $name = $_.BaseName
+
+        $content = try {
+            [System.IO.File]::ReadAllText($filepath)
+        } catch {
+            debug "Failed to read manifest file: $filepath (error: $_)"
+            return
+        }
+
+        if ($name -notmatch $query -and $content -notmatch $query) { return }
+
+        $json = try {
+            [System.Text.Json.JsonDocument]::Parse($content)
+        } catch {
+            debug "Failed to parse manifest file: $filepath (error: $_)"
+            return
+        }
+
+        if ($name -match $query) {
+            $list.Add([PSCustomObject]@{
+                    Name     = $name
+                    Version  = $json.RootElement.GetProperty('version')
+                    Source   = $bucket
+                    Binaries = ''
+                })
+        } else {
+            $bin = bin_match_json $json $query
             if ($bin) {
-                $_.bin = $bin
-                return $true
+                $list.Add([PSCustomObject]@{
+                        Name     = $name
+                        Version  = $json.RootElement.GetProperty('version')
+                        Source   = $bucket
+                        Binaries = $bin -join ' | '
+                    })
             }
         }
     }
-    $apps | ForEach-Object { $_.version = (Get-LatestVersion -AppName $_.name -Bucket $bucket); $_ }
 }
 
-function download_json($url) {
-    $ProgressPreference = 'SilentlyContinue'
-    $result = Invoke-WebRequest $url -UseBasicParsing -Headers $authheader | Select-Object -ExpandProperty content | ConvertFrom-Json
-    $ProgressPreference = 'Continue'
-    $result
-}
+# fallback function for PowerShell 5
+function search_bucket_legacy($bucket, $query) {
+    $apps = Get-ChildItem (Find-BucketDirectory $bucket) -Filter '*.json' -Recurse
 
-function github_ratelimit_reached {
-    $api_link = 'https://api.github.com/rate_limit'
-    $ret = (download_json $api_link).rate.remaining -eq 0
-    if ($ret) {
-        Write-Host "GitHub API rate limit reached.
-Please try again later or configure your API token using 'scoop config gh_token <your token>'."
+    $apps | ForEach-Object {
+        $filepath = $_.FullName
+        $name = $_.BaseName
+
+        $content = try {
+            [System.IO.File]::ReadAllText($filepath)
+        } catch {
+            debug "Failed to read manifest file: $filepath (error: $_)"
+            return
+        }
+
+        if ($name -notmatch $query -and $content -notmatch $query) { return }
+
+        $manifest = try {
+            ConvertFrom-Json $content -ErrorAction Stop
+        } catch {
+            debug "Failed to parse manifest file: $filepath (error: $_)"
+            return
+        }
+
+        if ($name -match $query) {
+            $list.Add([PSCustomObject]@{
+                    Name     = $name
+                    Version  = $manifest.Version
+                    Source   = $bucket
+                    Binaries = ''
+                })
+        } else {
+            $bin = bin_match $manifest $query
+            if ($bin) {
+                $list.Add([PSCustomObject]@{
+                        Name     = $name
+                        Version  = $manifest.Version
+                        Source   = $bucket
+                        Binaries = $bin -join ' | '
+                    })
+            }
+        }
     }
-    $ret
 }
 
 function search_remote($bucket, $query) {
@@ -88,54 +160,65 @@ function search_remotes($query) {
     $names = $buckets | Get-Member -MemberType NoteProperty | Select-Object -ExpandProperty name
 
     $results = $names | Where-Object { !(Test-Path $(Find-BucketDirectory $_)) } | ForEach-Object {
-        @{ "bucket" = $_; "results" = (search_remote $_ $query) }
+        @{ 'bucket' = $_; 'results' = (search_remote $_ $query) }
     } | Where-Object { $_.results }
 
     if ($results.count -gt 0) {
-        Write-Host "Results from other known buckets...
-(add them using 'scoop bucket add <bucket name>')"
+        Write-Host "Results from other known buckets...`n(add them using 'scoop bucket add <bucket name>')"
     }
 
+    $remote_list = @()
     $results | ForEach-Object {
-        $name = $_.bucket
+        $bucket = $_.bucket
         $_.results | ForEach-Object {
             $item = [ordered]@{}
             $item.Name = $_
-            $item.Source = $name
-            $list += [PSCustomObject]$item
+            $item.Source = $bucket
+            $remote_list += [PSCustomObject]$item
         }
     }
+    $remote_list
+}
 
+if (get_config USE_SQLITE_CACHE) {
+    . "$PSScriptRoot\..\lib\database.ps1"
+    Find-ScoopDBItem $query -From @('name', 'binary', 'shortcut') |
+        Select-Object -Property name, version, bucket, binary |
+        ForEach-Object {
+            $list.Add([PSCustomObject]@{
+                    Name     = $_.name
+                    Version  = $_.version
+                    Source   = $_.bucket
+                    Binaries = $_.binary
+                })
+        }
+} else {
+    try {
+        $query = New-Object Regex $query, 'IgnoreCase'
+    } catch {
+        abort "Invalid regular expression: $($_.Exception.InnerException.Message)"
+    }
+
+    $jsonTextAvailable = [System.AppDomain]::CurrentDomain.GetAssemblies() | Where-Object { [System.IO.Path]::GetFileNameWithoutExtension($_.Location) -eq 'System.Text.Json' }
+
+    Get-LocalBucket | ForEach-Object {
+        if ($jsonTextAvailable) {
+            search_bucket $_ $query
+        } else {
+            search_bucket_legacy $_ $query
+        }
+    }
+}
+
+if ($list.Count -gt 0) {
+    Write-Host 'Results from local buckets...'
     $list
 }
 
-Get-LocalBucket | ForEach-Object {
-    $res = search_bucket $_ $query
-    $local_results = $local_results -or $res
-    if ($res) {
-        $name = "$_"
-
-        $res | ForEach-Object {
-            $item = [ordered]@{}
-            $item.Name = $_.name
-            $item.Version = $_.version
-            $item.Source = $name
-            $item.Binaries = ""
-            if ($_.bin) { $item.Binaries = $_.bin -join ' | ' }
-            $list += [PSCustomObject]$item
-        }
-    }
-}
-
-if ($list.Length -gt 0) {
-    Write-Host "Results from local buckets..."
-    $list
-}
-
-if (!$local_results -and !(github_ratelimit_reached)) {
+if ($list.Count -eq 0 -and !(github_ratelimit_reached)) {
     $remote_results = search_remotes $query
     if (!$remote_results) {
-        warn "No matches found."
+        warn 'No matches found.'
         exit 1
     }
     $remote_results

@@ -1,10 +1,9 @@
-. "$PSScriptRoot\Scoop-TestLib.ps1"
-. "$PSScriptRoot\..\lib\core.ps1"
-. "$PSScriptRoot\..\lib\install.ps1"
-. "$PSScriptRoot\..\lib\unix.ps1"
-
-$repo_dir = (Get-Item $MyInvocation.MyCommand.Path).directory.parent.FullName
-$isUnix = is_unix
+BeforeAll {
+    . "$PSScriptRoot\Scoop-TestLib.ps1"
+    . "$PSScriptRoot\..\lib\core.ps1"
+    . "$PSScriptRoot\..\lib\system.ps1"
+    . "$PSScriptRoot\..\lib\install.ps1"
+}
 
 Describe 'Get-AppFilePath' -Tag 'Scoop' {
     BeforeAll {
@@ -74,28 +73,6 @@ Describe 'Test-HelperInstalled' -Tag 'Scoop' {
     }
 }
 
-Describe 'Test-Aria2Enabled' -Tag 'Scoop' {
-    It 'should return true if aria2 is installed' {
-        Mock Test-HelperInstalled { $true }
-        Mock get_config { $true }
-        Test-Aria2Enabled | Should -BeTrue
-    }
-
-    It 'should return false if aria2 is not installed' {
-        Mock Test-HelperInstalled { $false }
-        Mock get_config { $false }
-        Test-Aria2Enabled | Should -BeFalse
-
-        Mock Test-HelperInstalled { $false }
-        Mock get_config { $true }
-        Test-Aria2Enabled | Should -BeFalse
-
-        Mock Test-HelperInstalled { $true }
-        Mock get_config { $false }
-        Test-Aria2Enabled | Should -BeFalse
-    }
-}
-
 Describe 'Test-CommandAvailable' -Tag 'Scoop' {
     It 'should return true if command exists' {
         Test-CommandAvailable 'Write-Host' | Should -BeTrue
@@ -128,15 +105,14 @@ Describe 'is_directory' -Tag 'Scoop' {
     }
 }
 
-Describe 'movedir' -Tag 'Scoop' {
-    $extract_dir = 'subdir'
-    $extract_to = $null
-
+Describe 'movedir' -Tag 'Scoop', 'Windows' {
     BeforeAll {
         $working_dir = setup_working 'movedir'
+        $extract_dir = 'subdir'
+        $extract_to = $null
     }
 
-    It 'moves directories with no spaces in path' -Skip:$isUnix {
+    It 'moves directories with no spaces in path' {
         $dir = "$working_dir\user"
         movedir "$dir\_tmp\$extract_dir" "$dir\$extract_to"
 
@@ -144,7 +120,7 @@ Describe 'movedir' -Tag 'Scoop' {
         "$dir\_tmp\$extract_dir" | Should -Not -Exist
     }
 
-    It 'moves directories with spaces in path' -Skip:$isUnix {
+    It 'moves directories with spaces in path' {
         $dir = "$working_dir\user with space"
         movedir "$dir\_tmp\$extract_dir" "$dir\$extract_to"
 
@@ -157,7 +133,7 @@ Describe 'movedir' -Tag 'Scoop' {
         "$dir\_tmp" | Should -Not -Exist
     }
 
-    It 'moves directories with quotes in path' -Skip:$isUnix {
+    It 'moves directories with quotes in path' {
         $dir = "$working_dir\user with 'quote"
         movedir "$dir\_tmp\$extract_dir" "$dir\$extract_to"
 
@@ -166,14 +142,14 @@ Describe 'movedir' -Tag 'Scoop' {
     }
 }
 
-Describe 'shim' -Tag 'Scoop' {
+Describe 'shim' -Tag 'Scoop', 'Windows' {
     BeforeAll {
         $working_dir = setup_working 'shim'
         $shimdir = shimdir
-        $(ensure_in_path $shimdir) | Out-Null
+        Add-Path $shimdir
     }
 
-    It "links a file onto the user's path" -Skip:$isUnix {
+    It "links a file onto the user's path" {
         { Get-Command 'shim-test' -ea stop } | Should -Throw
         { Get-Command 'shim-test.ps1' -ea stop } | Should -Throw
         { Get-Command 'shim-test.cmd' -ea stop } | Should -Throw
@@ -186,15 +162,13 @@ Describe 'shim' -Tag 'Scoop' {
         shim-test | Should -Be 'Hello, world!'
     }
 
-    Context 'user with quote' {
-        It 'shims a file with quote in path' -Skip:$isUnix {
-            { Get-Command 'shim-test' -ea stop } | Should -Throw
-            { shim-test } | Should -Throw
+    It 'shims a file with quote in path' {
+        { Get-Command 'shim-test' -ea stop } | Should -Throw
+        { shim-test } | Should -Throw
 
-            shim "$working_dir\user with 'quote\shim-test.ps1" $false 'shim-test'
-            { Get-Command 'shim-test' -ea stop } | Should -Not -Throw
-            shim-test | Should -Be 'Hello, world!'
-        }
+        shim "$working_dir\user with 'quote\shim-test.ps1" $false 'shim-test'
+        { Get-Command 'shim-test' -ea stop } | Should -Not -Throw
+        shim-test | Should -Be 'Hello, world!'
     }
 
     AfterEach {
@@ -202,14 +176,14 @@ Describe 'shim' -Tag 'Scoop' {
     }
 }
 
-Describe 'rm_shim' -Tag 'Scoop' {
+Describe 'rm_shim' -Tag 'Scoop', 'Windows' {
     BeforeAll {
         $working_dir = setup_working 'shim'
         $shimdir = shimdir
-        $(ensure_in_path $shimdir) | Out-Null
+        Add-Path $shimdir
     }
 
-    It 'removes shim from path' -Skip:$isUnix {
+    It 'removes shim from path' {
         shim "$working_dir\shim-test.ps1" $false 'shim-test'
 
         rm_shim 'shim-test' $shimdir
@@ -221,19 +195,19 @@ Describe 'rm_shim' -Tag 'Scoop' {
     }
 }
 
-Describe 'get_app_name_from_shim' -Tag 'Scoop' {
+Describe 'get_app_name_from_shim' -Tag 'Scoop', 'Windows' {
     BeforeAll {
         $working_dir = setup_working 'shim'
         $shimdir = shimdir
-        $(ensure_in_path $shimdir) | Out-Null
+        Add-Path $shimdir
         Mock appsdir { $working_dir }
     }
 
-    It 'returns empty string if file does not exist' -Skip:$isUnix {
+    It 'returns empty string if file does not exist' {
         get_app_name_from_shim 'non-existent-file' | Should -Be ''
     }
 
-    It 'returns app name if file exists and is a shim to an app' -Skip:$isUnix {
+    It 'returns app name if file exists and is a shim to an app' {
         ensure "$working_dir/mockapp/current/"
         Write-Output '' | Out-File "$working_dir/mockapp/current/mockapp1.ps1"
         shim "$working_dir/mockapp/current/mockapp1.ps1" $false 'shim-test1'
@@ -246,7 +220,7 @@ Describe 'get_app_name_from_shim' -Tag 'Scoop' {
         get_app_name_from_shim "$shim_path2" | Should -Be 'mockapp'
     }
 
-    It 'returns empty string if file exists and is not a shim' -Skip:$isUnix {
+    It 'returns empty string if file exists and is not a shim' {
         Write-Output 'lorem ipsum' | Out-File -Encoding ascii "$working_dir/mock-shim.ps1"
         get_app_name_from_shim "$working_dir/mock-shim.ps1" | Should -Be ''
     }
@@ -263,35 +237,76 @@ Describe 'get_app_name_from_shim' -Tag 'Scoop' {
     }
 }
 
-Describe 'ensure_robocopy_in_path' -Tag 'Scoop' {
-    $shimdir = shimdir $false
-    Mock versiondir { $repo_dir }
-
-    Context 'robocopy is not in path' {
-        It 'shims robocopy when not on path' -Skip:$isUnix {
-            Mock Test-CommandAvailable { $false }
-            Test-CommandAvailable robocopy | Should -Be $false
-
-            ensure_robocopy_in_path
-
-            # "$shimdir/robocopy.ps1" | should -exist
-            "$shimdir/robocopy.exe" | Should -Exist
-
-            # clean up
-            rm_shim robocopy $(shimdir $false) | Out-Null
-        }
+Describe 'cache_path' -Tag 'Scoop' {
+    It 'returns the correct cache path for a given input' {
+        $url = 'https://example.com/git.zip'
+        $ret = cache_path 'git' '2.44.0' $url
+        $inputStream = [System.IO.MemoryStream]::new([System.Text.Encoding]::UTF8.GetBytes($url))
+        $sha = (Get-FileHash -Algorithm SHA256 -InputStream $inputStream).Hash.ToLower().Substring(0, 7)
+        $ret | Should -Be "$cachedir\git#2.44.0#$sha.zip"
     }
 
-    Context 'robocopy is in path' {
-        It 'does not shim robocopy when it is in path' -Skip:$isUnix {
-            Mock Test-CommandAvailable { $true }
-            Test-CommandAvailable robocopy | Should -Be $true
+    # # NOTE: Remove this 6 months after the feature ships.
+    It 'returns the old format cache path for a given input' {
+        Mock Test-Path { $true }
+        $ret = cache_path 'git' '2.44.0' 'https://example.com/git.zip'
+        $ret | Should -Be "$cachedir\git#2.44.0#https_example.com_git.zip"
+    }
+}
 
-            ensure_robocopy_in_path
+Describe 'Get-RelativePath' -Tag 'Scoop' {
+    It 'returns relative path for child path' {
+        $from = 'C:\root\bucket'
+        $to = 'C:\root\bucket\foo\bar.json'
+        Get-RelativePath $from $to | Should -Be 'foo\bar.json'
+    }
+    It 'returns original when different drive/scheme' {
+        $from = 'C:\root\bucket'
+        $to = 'D:\other\file.json'
+        Get-RelativePath $from $to | Should -Be $to
+    }
+    It 'handles paths containing characters that break [System.Uri]' {
+        $from = 'C:\b#ucket'
+        $to = 'C:\b#ucket\foo.json'
+        Get-RelativePath $from $to | Should -Be 'foo.json'
+    }
+    It 'returns the input when target is not under base' {
+        $from = 'C:\root\bucket'
+        $to = 'C:\other\foo.json'
+        Get-RelativePath $from $to | Should -Be $to
+    }
+}
 
-            # "$shimdir/robocopy.ps1" | should -not -exist
-            "$shimdir/robocopy.exe" | Should -Not -Exist
-        }
+Describe 'is_in_dir' -Tag 'Scoop' {
+    It 'returns false when path is not under dir' {
+        is_in_dir 'C:\test' 'C:\foo' | Should -BeFalse
+    }
+    It 'returns true when path is under dir' {
+        is_in_dir 'C:\test' 'C:\test\foo\baz.zip' | Should -BeTrue
+    }
+    It 'returns true when dir has a trailing separator' {
+        is_in_dir "$PSScriptRoot\..\" "$PSScriptRoot" | Should -BeTrue
+    }
+    It 'returns false when path escapes dir through dot segments' {
+        is_in_dir 'C:\test\sub' 'C:\test\sub\..\..\Windows\notepad.exe' | Should -BeFalse
+    }
+}
+
+Describe 'currentdir' -Tag 'Scoop' {
+    It 'resolves version directory when NO_JUNCTION is enabled without preloading versions.ps1' {
+        Mock get_config { $true } -ParameterFilter { $name -eq 'NO_JUNCTION' }
+        Mock appdir { 'C:\scoop\apps\git' }
+        { currentdir 'git' $false } | Should -Not -Throw
+    }
+    It 'returns the junction path when NO_JUNCTION is disabled' {
+        Mock get_config { $false } -ParameterFilter { $name -eq 'NO_JUNCTION' }
+        Mock appdir { 'C:\scoop\apps\git' }
+        currentdir 'git' $false | Should -Be 'C:\scoop\apps\git\current'
+    }
+    It 'keeps using the junction for scoop itself' {
+        Mock get_config { $true } -ParameterFilter { $name -eq 'NO_JUNCTION' }
+        Mock appdir { 'C:\scoop\apps\scoop' }
+        currentdir 'scoop' $false | Should -Be 'C:\scoop\apps\scoop\current'
     }
 }
 
@@ -398,6 +413,98 @@ Describe 'app' -Tag 'Scoop' {
     }
 }
 
+Describe 'Get-PEMachine' -Tag 'Scoop', 'Windows' {
+    It 'returns machine type for a valid PE file' {
+        $shim_path = get_shim_path
+        if ($shim_path -and (Test-Path $shim_path)) {
+            $machine = Get-PEMachine $shim_path
+            # Should be a known machine type (I386 (x86): 0x014c, amd64 (x64): 0x8664, arm64: 0xAA64)
+            # https://learn.microsoft.com/en-us/windows/win32/sysinfo/image-file-machine-constants
+            $machine | Should -BeIn @(0x014c, 0x8664, 0xAA64)
+        } else {
+            Set-ItResult -Skipped -Because 'shim exe not found'
+        }
+    }
+
+    It 'returns 0 for a non-existent file' {
+        Get-PEMachine 'C:\nonexistent\fake.exe' | Should -Be 0
+    }
+
+    It 'returns 0 for a non-PE file' {
+        $working_dir = setup_working 'shim'
+        Get-PEMachine "$working_dir\shim-test.ps1" | Should -Be 0
+    }
+}
+
+Describe 'WoW64 path rewriting in shim' -Tag 'Scoop', 'Windows' {
+    BeforeAll {
+        $shimdir = shimdir
+        # CI checkouts have no installed scoop version dir, so point at the bundled shim.exe
+        $repo_shim = Join-Path $PSScriptRoot '..\supporting\shims\scoopcs\shim.exe'
+        Mock -CommandName get_shim_path -MockWith { $repo_shim }
+    }
+
+    It 'rewrites System32 to Sysnative in the shim file when the shim exe is x86 on x64 OS' {
+        $target = "$env:SystemRoot\System32\notepad.exe"
+        $rewrites = [System.Environment]::Is64BitOperatingSystem -and (Get-PEMachine (get_shim_path)) -eq 0x014c
+
+        shim $target $false 'wow64-test'
+
+        $line = Get-Content "$shimdir\wow64-test.shim" | Select-Object -First 1
+        if ($rewrites) {
+            $line | Should -BeLike "*$env:SystemRoot\Sysnative\notepad.exe*"
+        } else {
+            $line | Should -BeLike "*$env:SystemRoot\System32\notepad.exe*"
+        }
+
+        # the 64-bit reader resolves the target back to the real System32 path either way
+        Get-ShimTarget "$shimdir\wow64-test.shim" | Should -Be (Resolve-Path $target).Path
+    }
+
+    It 'does not rewrite paths outside System32 and SysWOW64' {
+        $target = "$env:SystemRoot\explorer.exe"
+
+        shim $target $false 'wow64-test'
+
+        $line = Get-Content "$shimdir\wow64-test.shim" | Select-Object -First 1
+        $line | Should -BeLike "*$target*"
+        Get-ShimTarget "$shimdir\wow64-test.shim" | Should -Be $target
+    }
+
+    It 'rewrites SysWOW64 to System32 in the shim file when the shim exe is x86 on x64 OS' {
+        $wow = Join-Path ${env:SystemRoot} 'SysWOW64\notepad.exe'
+        if (-not (Test-Path $wow)) {
+            Set-ItResult -Skipped -Because 'SysWOW64 notepad not present'
+        }
+        $target = $wow
+        $rewrites = [System.Environment]::Is64BitOperatingSystem -and (Get-PEMachine (get_shim_path)) -eq 0x014c
+
+        shim $target $false 'wow64-test'
+
+        $line = Get-Content "$shimdir\wow64-test.shim" | Select-Object -First 1
+        if ($rewrites) {
+            # 64-bit reader sees the redirected (real) location via System32
+            $line | Should -BeLike "*$env:SystemRoot\System32\notepad.exe*"
+            Get-ShimTarget "$shimdir\wow64-test.shim" | Should -Be (Resolve-Path "$env:SystemRoot\System32\notepad.exe").Path
+        } else {
+            $line | Should -BeLike "*$target*"
+            Get-ShimTarget "$shimdir\wow64-test.shim" | Should -Be (Resolve-Path $target).Path
+        }
+    }
+
+    It 'does not fail on a shim file without a resolvable target' {
+        Write-Output 'echo hi' | Out-File "$shimdir\broken.cmd" -Encoding ascii
+        { Get-ShimTarget "$shimdir\broken.cmd" } | Should -Not -Throw
+        Get-ShimTarget "$shimdir\broken.cmd" | Should -BeNullOrEmpty
+
+        Remove-Item "$shimdir\broken.cmd" -Force
+    }
+
+    AfterEach {
+        rm_shim 'wow64-test' $shimdir
+    }
+}
+
 Describe 'Format Architecture String' -Tag 'Scoop' {
     It 'should keep correct architectures' {
         Format-ArchitectureString '32bit' | Should -Be '32bit'
@@ -432,5 +539,19 @@ Describe 'Format Architecture String' -Tag 'Scoop' {
 
     It 'should show an error with an invalid architecture' {
         { Format-ArchitectureString 'PPC' } | Should -Throw "Invalid architecture: 'ppc'"
+    }
+}
+
+Describe 'substitute' -Tag 'Scoop' {
+    It 'should properly handle keys that are substrings of other keys' {
+        $params = @{}
+
+        # Run repeatedly (10 times) to reduce the likelihood of accidental correct ordering.
+        1 .. 10 | ForEach-Object {
+            $params["`$name$($_)"] = "$($_).exe"
+            $params["`$name$($_)NoExt"] = "$_"
+
+            substitute ("`$name$($_)NoExt") $params $false | Should -Be "$_"
+        }
     }
 }

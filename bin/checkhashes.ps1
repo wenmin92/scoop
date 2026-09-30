@@ -46,8 +46,7 @@ param(
 . "$PSScriptRoot\..\lib\autoupdate.ps1"
 . "$PSScriptRoot\..\lib\json.ps1"
 . "$PSScriptRoot\..\lib\versions.ps1"
-. "$PSScriptRoot\..\lib\install.ps1"
-. "$PSScriptRoot\..\lib\unix.ps1"
+. "$PSScriptRoot\..\lib\download.ps1"
 
 $Dir = Convert-Path $Dir
 if ($ForceUpdate) { $Update = $true }
@@ -65,7 +64,7 @@ foreach ($single in Get-ChildItem $Dir -Filter "$App.json" -Recurse) {
     $file = $single.FullName
     $manifest = parse_json $file
 
-    # Skip nighly manifests, since their hash validation is skipped
+    # Skip nightly manifests, since their hash validation is skipped
     if ($manifest.version -eq 'nightly') { continue }
 
     $urls = @()
@@ -114,13 +113,16 @@ foreach ($current in $MANIFESTS) {
 
     $current.urls | ForEach-Object {
         $algorithm, $expected = get_hash $current.hashes[$count]
-        $version = 'HASH_CHECK'
-        $tmp = $expected_hash -split ':'
+        if ($UseCache) {
+            $version = $current.manifest.version
+        } else {
+            $version = 'HASH_CHECK'
+        }
 
         Invoke-CachedDownload $current.app $version $_ $null $null -use_cache:$UseCache
 
-        $to_check = fullpath (cache_path $current.app $version $_)
-        $actual_hash = compute_hash $to_check $algorithm
+        $to_check = cache_path $current.app $version $_
+        $actual_hash = (Get-FileHash -Path $to_check -Algorithm $algorithm).Hash.ToLower()
 
         # Append type of algorithm to both expected and actual if it's not sha256
         if ($algorithm -ne 'sha256') {
@@ -144,13 +146,13 @@ foreach ($current in $MANIFESTS) {
         Write-Host "$($current.app): " -NoNewline
         Write-Host 'Mismatch found ' -ForegroundColor Red
         $mismatched | ForEach-Object {
-            $file = fullpath (cache_path $current.app $version $current.urls[$_])
-            Write-Host  "`tURL:`t`t$($current.urls[$_])"
+            $file = cache_path $current.app $version $current.urls[$_]
+            Write-Host "`tURL:`t`t$($current.urls[$_])"
             if (Test-Path $file) {
-                Write-Host  "`tFirst bytes:`t$((get_magic_bytes_pretty $file ' ').ToUpper())"
+                Write-Host "`tFirst bytes:`t$((get_magic_bytes_pretty $file ' ').ToUpper())"
             }
-            Write-Host  "`tExpected:`t$($current.hashes[$_])" -ForegroundColor Green
-            Write-Host  "`tActual:`t`t$($actuals[$_])" -ForegroundColor Red
+            Write-Host "`tExpected:`t$($current.hashes[$_])" -ForegroundColor Green
+            Write-Host "`tActual:`t`t$($actuals[$_])" -ForegroundColor Red
         }
     }
 
@@ -164,7 +166,7 @@ foreach ($current in $MANIFESTS) {
             $32bit_count = 0
             $arm64_count = 0
 
-            # 64bit is get, donwloaded and added first
+            # 64bit is get, downloaded and added first
             if ($platforms.Contains('64bit')) {
                 $64bit_count = $current.manifest.architecture.'64bit'.hash.Count
                 $current.manifest.architecture.'64bit'.hash = $actuals[0..($64bit_count - 1)]

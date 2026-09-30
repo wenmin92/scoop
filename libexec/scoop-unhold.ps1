@@ -15,7 +15,7 @@
 . "$PSScriptRoot\..\lib\versions.ps1" # 'Select-CurrentVersion'
 
 $opt, $apps, $err = getopt $args 'g' 'global'
-if ($err) { "scoop unhold: $err"; exit 1 }
+if ($err) { error "scoop unhold: $err"; exit 1 }
 
 $global = $opt.g -or $opt.global
 
@@ -53,8 +53,16 @@ $apps | ForEach-Object {
     }
     $dir = versiondir $app $version $global
     $json = install_info $app $version $global
+    if (!$json) {
+        error "Failed to unhold '$app'"
+        continue
+    }
     $install = @{}
     $json | Get-Member -MemberType Properties | ForEach-Object { $install.Add($_.Name, $json.($_.Name)) }
+    if (!$install.hold) {
+        info "'$app' is not held."
+        continue
+    }
     $install.hold = $null
     save_install_info $install $dir
     success "$app is no longer held and can be updated again."

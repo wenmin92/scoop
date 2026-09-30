@@ -50,6 +50,7 @@
                 },
                 "mode": {
                     "enum": [
+                        "github",
                         "download",
                         "extract",
                         "json",
@@ -126,10 +127,6 @@
                 },
                 "installer": {
                     "$ref": "#/definitions/installer"
-                },
-                "msi": {
-                    "$ref": "#/definitions/stringOrArrayOfStrings",
-                    "description": "Deprecated"
                 },
                 "post_install": {
                     "$ref": "#/definitions/stringOrArrayOfStrings"
@@ -248,6 +245,15 @@
                 "hash": {
                     "$ref": "#/definitions/hashExtractionOrArrayOfHashExtractions"
                 },
+                "installer": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "file": {
+                            "type": "string"
+                        }
+                    }
+                },
                 "license": {
                     "$ref": "#/definitions/license"
                 },
@@ -265,6 +271,9 @@
                             "type": "string"
                         }
                     }
+                },
+                "shortcuts": {
+                    "$ref": "#/definitions/shortcutsArray"
                 },
                 "url": {
                     "$ref": "#/definitions/autoupdateUriOrArrayOfAutoupdateUris"
@@ -590,10 +599,6 @@
         },
         "license": {
             "$ref": "#/definitions/license"
-        },
-        "msi": {
-            "$ref": "#/definitions/stringOrArrayOfStrings",
-            "description": "Deprecated"
         },
         "notes": {
             "$ref": "#/definitions/stringOrArrayOfStrings"
